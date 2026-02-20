@@ -1,0 +1,17 @@
+[package]
+name = "hammer-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "hammer_core"
+path = "src/lib.rs"
+
+[dependencies]
+alloy-primitives = "1.5.7"
+alloy-rpc-types-eth = "1.7.3"
+revm = { version = "34.0.0", features = ["std", "alloydb"] }
+revm-inspectors = { version = "0.34.2", features = ["std"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
