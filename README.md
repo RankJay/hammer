@@ -55,7 +55,7 @@ cargo install --path cli
 Or build from source:
 
 ```sh
-git clone https://github.com/TODO/hammer.git
+git clone https://github.com/RankJay/hammer.git
 cd hammer
 cargo build --release
 ```
