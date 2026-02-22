@@ -118,3 +118,22 @@ fn test_compare_missing_tx_hash_arg() {
         .failure()
         .stderr(predicate::str::contains("--tx-hash"));
 }
+
+#[test]
+fn test_compare_invalid_tx_hash() {
+    cmd()
+        .args([
+            "compare",
+            "--tx-hash",
+            "not-a-hash",
+            "--rpc-url",
+            "http://127.0.0.1:1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid tx hash"));
+}
+
+// Guards 1 (CREATE), 2 (blob), 3 (pre-Berlin block), and 4 (reverted) all require a live
+// transaction from RPC and cannot be exercised in offline CLI tests. Their logic lives in
+// pure helper functions in cli/src/commands/util.rs and is covered by unit tests there.

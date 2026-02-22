@@ -9,7 +9,7 @@ use revm::context::{BlockEnv, TxEnv};
 use revm::primitives::TxKind;
 use std::path::PathBuf;
 
-use super::util::{parse_block_id, parse_hex_bytes, parse_u256};
+use super::util::{assert_post_berlin, parse_block_id, parse_hex_bytes, parse_u256};
 
 #[derive(Args)]
 pub struct ValidateArgs {
@@ -54,6 +54,8 @@ pub async fn run(args: ValidateArgs) -> Result<()> {
         .ok_or_else(|| eyre::eyre!("Block not found"))?;
 
     let header = &block.header;
+    // Guard 3: Reject pre-Berlin blocks
+    assert_post_berlin(header.number)?;
     let block_env = BlockEnv {
         number: U256::from(header.number),
         beneficiary: header.beneficiary,

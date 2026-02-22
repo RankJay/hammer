@@ -388,4 +388,347 @@ mod tests {
             ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST
         );
     }
+
+    // ── Optimality accounting edge cases ────────────────────────────────────
+
+    #[test]
+    fn test_optimality_perfect_list() {
+        // declared == optimal: no waste, no entries
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared = make_declared(vec![(contract_a(), vec![slot(1)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert!(report.is_valid);
+        assert!(report.entries.is_empty());
+        assert_eq!(report.gas_summary.waste_per_tx, 0);
+        assert_eq!(
+            report.gas_summary.declared_list_cost,
+            report.gas_summary.optimal_list_cost
+        );
+        // ADDRESS + 1 SLOT
+        assert_eq!(
+            report.gas_summary.optimal_list_cost,
+            ACCESS_LIST_ADDRESS_COST + ACCESS_LIST_STORAGE_KEY_COST
+        );
+    }
+
+    #[test]
+    fn test_optimality_both_empty() {
+        // Nothing declared, nothing needed
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared(vec![]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert!(report.is_valid);
+        assert_eq!(report.gas_summary.declared_list_cost, 0);
+        assert_eq!(report.gas_summary.optimal_list_cost, 0);
+        assert_eq!(report.gas_summary.waste_per_tx, 0);
+    }
+
+    #[test]
+    fn test_optimality_purely_stale_address() {
+        // Declared has a full stale entry (address + slot), optimal is empty.
+        // waste_per_tx == declared_list_cost == stale gas_waste
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared(vec![(contract_a(), vec![slot(1)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let expected_cost = ACCESS_LIST_ADDRESS_COST + ACCESS_LIST_STORAGE_KEY_COST; // 4300
+        assert_eq!(report.gas_summary.declared_list_cost, expected_cost);
+        assert_eq!(report.gas_summary.optimal_list_cost, 0);
+        assert_eq!(report.gas_summary.waste_per_tx, expected_cost as i64);
+        let stale = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Stale { .. }))
+            .unwrap();
+        assert_eq!(stale.gas_waste(), expected_cost);
+        // Invariant: upfront issue waste == waste_per_tx for pure upfront-cost cases
+        let upfront_waste: u64 = report
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    DiffEntry::Stale { .. }
+                        | DiffEntry::Redundant { .. }
+                        | DiffEntry::Duplicate { .. }
+                )
+            })
+            .map(|e| e.gas_waste())
+            .sum();
+        assert_eq!(upfront_waste as i64, report.gas_summary.waste_per_tx);
+    }
+
+    #[test]
+    fn test_optimality_purely_redundant() {
+        // tx_from in declared, optimal is empty.
+        // waste_per_tx == ADDRESS_COST; redundant gas_waste == ADDRESS_COST
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared(vec![(from_addr(), vec![])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert_eq!(
+            report.gas_summary.declared_list_cost,
+            ACCESS_LIST_ADDRESS_COST
+        );
+        assert_eq!(report.gas_summary.optimal_list_cost, 0);
+        assert_eq!(
+            report.gas_summary.waste_per_tx,
+            ACCESS_LIST_ADDRESS_COST as i64
+        );
+        let redundant = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Redundant { .. }))
+            .unwrap();
+        assert_eq!(redundant.gas_waste(), ACCESS_LIST_ADDRESS_COST);
+        // Invariant: upfront issue waste == waste_per_tx for pure upfront-cost cases
+        let upfront_waste: u64 = report
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    DiffEntry::Stale { .. }
+                        | DiffEntry::Redundant { .. }
+                        | DiffEntry::Duplicate { .. }
+                )
+            })
+            .map(|e| e.gas_waste())
+            .sum();
+        assert_eq!(upfront_waste as i64, report.gas_summary.waste_per_tx);
+    }
+
+    #[test]
+    fn test_optimality_duplicate_slot() {
+        // contract_a with slot(1) duplicated.
+        // declared_list_cost = ADDRESS + 2*SLOT = 6200
+        // optimal_list_cost  = ADDRESS + 1*SLOT = 4300
+        // waste_per_tx = 1900 == duplicate gas_waste
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared = AccessList(vec![AccessListItem {
+            address: contract_a(),
+            storage_keys: vec![slot(1), slot(1)],
+        }]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let expected_declared = ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST;
+        let expected_optimal = ACCESS_LIST_ADDRESS_COST + ACCESS_LIST_STORAGE_KEY_COST;
+        assert_eq!(report.gas_summary.declared_list_cost, expected_declared);
+        assert_eq!(report.gas_summary.optimal_list_cost, expected_optimal);
+        assert_eq!(
+            report.gas_summary.waste_per_tx,
+            ACCESS_LIST_STORAGE_KEY_COST as i64
+        );
+        let dup = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Duplicate { .. }))
+            .unwrap();
+        assert_eq!(dup.gas_waste(), ACCESS_LIST_STORAGE_KEY_COST);
+        // Invariant: upfront issue waste == waste_per_tx for pure upfront-cost cases
+        let upfront_waste: u64 = report
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    DiffEntry::Stale { .. }
+                        | DiffEntry::Redundant { .. }
+                        | DiffEntry::Duplicate { .. }
+                )
+            })
+            .map(|e| e.gas_waste())
+            .sum();
+        assert_eq!(upfront_waste as i64, report.gas_summary.waste_per_tx);
+    }
+
+    #[test]
+    fn test_optimality_purely_missing() {
+        // Declared is empty but optimal needs 1 addr + 1 slot.
+        // declared_list_cost = 0, optimal_list_cost = 4300
+        // waste_per_tx = -4300 (underpaid upfront)
+        // missing gas_waste = 1 * (COLD_SLOAD - WARM) = 2000  (execution penalty, different space)
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared = make_declared(vec![]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert_eq!(report.gas_summary.declared_list_cost, 0);
+        assert_eq!(
+            report.gas_summary.optimal_list_cost,
+            ACCESS_LIST_ADDRESS_COST + ACCESS_LIST_STORAGE_KEY_COST
+        );
+        assert_eq!(
+            report.gas_summary.waste_per_tx,
+            -((ACCESS_LIST_ADDRESS_COST + ACCESS_LIST_STORAGE_KEY_COST) as i64)
+        );
+        let missing = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Missing { .. }))
+            .unwrap();
+        assert_eq!(
+            missing.gas_waste(),
+            COLD_SLOAD_COST - WARM_STORAGE_READ_COST
+        );
+    }
+
+    #[test]
+    fn test_optimality_purely_incomplete() {
+        // contract_a declared with no slots, optimal needs 2 slots.
+        // declared_list_cost = ADDRESS = 2400
+        // optimal_list_cost  = ADDRESS + 2*SLOT = 6200
+        // waste_per_tx = -3800  (underpaid)
+        // incomplete gas_waste = 2 * 2000 = 4000  (execution penalty)
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1), slot(2)])]);
+        let declared = make_declared(vec![(contract_a(), vec![])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert_eq!(
+            report.gas_summary.declared_list_cost,
+            ACCESS_LIST_ADDRESS_COST
+        );
+        assert_eq!(
+            report.gas_summary.optimal_list_cost,
+            ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST
+        );
+        assert_eq!(
+            report.gas_summary.waste_per_tx,
+            ACCESS_LIST_ADDRESS_COST as i64
+                - (ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST) as i64
+        );
+        let incomplete = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Incomplete { .. }))
+            .unwrap();
+        assert_eq!(
+            incomplete.gas_waste(),
+            2 * (COLD_SLOAD_COST - WARM_STORAGE_READ_COST)
+        );
+    }
+
+    #[test]
+    fn test_optimality_mixed_stale_and_missing() {
+        // Declared has contract_b (stale), optimal needs contract_a (missing).
+        // Both cost the same upfront (ADDRESS + SLOT = 4300), so waste_per_tx == 0.
+        // But stale gas_waste (4300) and missing gas_waste (2000) are in different spaces —
+        // summing them into a single "total_issue_waste" would give 6300, not 0.
+        // This test proves the two cost spaces must be reported separately.
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared = make_declared(vec![(contract_b(), vec![slot(1)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert_eq!(report.gas_summary.waste_per_tx, 0);
+        let stale_waste: u64 = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, DiffEntry::Stale { .. }))
+            .map(|e| e.gas_waste())
+            .sum();
+        let missing_waste: u64 = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, DiffEntry::Missing { .. }))
+            .map(|e| e.gas_waste())
+            .sum();
+        assert_eq!(
+            stale_waste,
+            ACCESS_LIST_ADDRESS_COST + ACCESS_LIST_STORAGE_KEY_COST
+        );
+        assert_eq!(missing_waste, COLD_SLOAD_COST - WARM_STORAGE_READ_COST);
+        // Summing them would give 6300 — completely different from waste_per_tx (0)
+        assert_ne!(stale_waste + missing_waste, 0);
+    }
+
+    #[test]
+    fn test_optimality_redundant_with_slots() {
+        // tx_from declared with 2 slots.
+        // redundant gas_waste = ADDRESS + 2*SLOT = 6200
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared(vec![(from_addr(), vec![slot(1), slot(2)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let redundant = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Redundant { .. }))
+            .unwrap();
+        assert_eq!(
+            redundant.gas_waste(),
+            ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST
+        );
+        assert_eq!(
+            report.gas_summary.waste_per_tx,
+            (ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST) as i64
+        );
+        // Invariant: upfront issue waste == waste_per_tx for pure upfront-cost cases
+        let upfront_waste: u64 = report
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    DiffEntry::Stale { .. }
+                        | DiffEntry::Redundant { .. }
+                        | DiffEntry::Duplicate { .. }
+                )
+            })
+            .map(|e| e.gas_waste())
+            .sum();
+        assert_eq!(upfront_waste as i64, report.gas_summary.waste_per_tx);
+    }
+
+    #[test]
+    fn test_optimality_stale_slots_on_valid_address() {
+        // contract_a in both; declared has an extra stale slot.
+        // stale gas_waste = 1*SLOT = 1900, waste_per_tx = 1900
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared = make_declared(vec![(contract_a(), vec![slot(1), slot(2)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let stale = report
+            .entries
+            .iter()
+            .find(
+                |e| matches!(e, DiffEntry::Stale { storage_keys, .. } if !storage_keys.is_empty()),
+            )
+            .unwrap();
+        assert_eq!(stale.gas_waste(), ACCESS_LIST_STORAGE_KEY_COST);
+        assert_eq!(
+            report.gas_summary.waste_per_tx,
+            ACCESS_LIST_STORAGE_KEY_COST as i64
+        );
+    }
+
+    #[test]
+    fn test_optimality_incomplete_and_stale_same_address() {
+        // contract_a: optimal needs {s1, s2}, declared has {s1, s3}.
+        // Incomplete(s2): gas_waste = 1*(COLD_SLOAD - WARM) = 2000
+        // Stale(s3):      gas_waste = 1*SLOT = 1900
+        // declared_list_cost = ADDRESS + 2*SLOT = 6200
+        // optimal_list_cost  = ADDRESS + 2*SLOT = 6200
+        // waste_per_tx = 0   (same list cost, different slots)
+        // But execution penalty from Incomplete is 2000 — shown separately.
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1), slot(2)])]);
+        let declared = make_declared(vec![(contract_a(), vec![slot(1), slot(3)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert_eq!(
+            report.gas_summary.declared_list_cost,
+            ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST
+        );
+        assert_eq!(
+            report.gas_summary.optimal_list_cost,
+            ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST
+        );
+        assert_eq!(report.gas_summary.waste_per_tx, 0);
+        let incomplete = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Incomplete { .. }))
+            .unwrap();
+        assert_eq!(
+            incomplete.gas_waste(),
+            COLD_SLOAD_COST - WARM_STORAGE_READ_COST
+        );
+        let stale = report
+            .entries
+            .iter()
+            .find(
+                |e| matches!(e, DiffEntry::Stale { storage_keys, .. } if !storage_keys.is_empty()),
+            )
+            .unwrap();
+        assert_eq!(stale.gas_waste(), ACCESS_LIST_STORAGE_KEY_COST);
+    }
 }

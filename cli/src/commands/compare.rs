@@ -9,6 +9,8 @@ use reqwest::Url;
 use revm::context::{BlockEnv, TxEnv};
 use revm::primitives::TxKind;
 
+use super::util::{assert_not_blob, assert_not_create, assert_post_berlin};
+
 #[derive(Args)]
 pub struct CompareArgs {
     #[arg(long, default_value = "https://eth.llamarpc.com")]
@@ -31,15 +33,31 @@ pub async fn run(args: CompareArgs) -> Result<()> {
         .await?
         .ok_or_else(|| eyre::eyre!("Transaction not found"))?;
 
+    // Guard 1: Reject contract creation transactions
+    assert_not_create(tx.inner.to())?;
+
+    // Guard 2: Reject blob transactions (EIP-4844, Type 3)
+    assert_not_blob(tx.inner.blob_versioned_hashes())?;
+
+    // Guard 4: Reject reverted transactions
     let block_hash = tx
         .block_hash
         .ok_or_else(|| eyre::eyre!("Transaction not mined"))?;
+    let receipt = provider
+        .get_transaction_receipt(tx_hash)
+        .await?
+        .ok_or_else(|| eyre::eyre!("Receipt not found"))?;
+    if !receipt.status() {
+        eyre::bail!("transaction reverted on-chain — access list comparison is not meaningful for failed transactions");
+    }
     let block = provider
         .get_block_by_hash(block_hash)
         .await?
         .ok_or_else(|| eyre::eyre!("Block not found"))?;
 
     let header = &block.header;
+    // Guard 3: Reject pre-Berlin blocks
+    assert_post_berlin(header.number)?;
     let block_env = BlockEnv {
         number: U256::from(header.number),
         beneficiary: header.beneficiary,
@@ -92,15 +110,45 @@ pub async fn run(args: CompareArgs) -> Result<()> {
 
     let report = validate_replay(db, tx_env, block_env, declared).wrap_err("validation failed")?;
 
-    let total_issue_waste: u64 = report.entries.iter().map(|e| e.gas_waste()).sum();
-    let pct = if report.gas_summary.optimal_list_cost > 0 || total_issue_waste > 0 {
-        let opt = report.gas_summary.optimal_list_cost as f64;
-        let waste = total_issue_waste as f64;
-        100.0 * opt / (opt + waste)
-    } else {
-        100.0
-    };
-    println!("Access list optimality: {:.1}%", pct.clamp(0.0, 100.0));
+    let s = &report.gas_summary;
+    let sign = if s.waste_per_tx >= 0 { "+" } else { "-" };
+    println!(
+        "List cost:  {} gas declared  →  {} gas optimal  ({}{}  upfront)",
+        s.declared_list_cost,
+        s.optimal_list_cost,
+        sign,
+        s.waste_per_tx.unsigned_abs(),
+    );
+
+    let execution_penalty: u64 = report
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                hammer_core::types::DiffEntry::Missing { .. }
+                    | hammer_core::types::DiffEntry::Incomplete { .. }
+            )
+        })
+        .map(|e| e.gas_waste())
+        .sum();
+    if execution_penalty > 0 {
+        let missing_count = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, hammer_core::types::DiffEntry::Missing { .. }))
+            .count();
+        let incomplete_count = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, hammer_core::types::DiffEntry::Incomplete { .. }))
+            .count();
+        println!(
+            "Execution:  {} missing / {} incomplete  →  +{} gas at runtime",
+            missing_count, incomplete_count, execution_penalty,
+        );
+    }
+
     if !report.is_valid {
         println!("Issues: {} entries", report.entries.len());
         for e in &report.entries {

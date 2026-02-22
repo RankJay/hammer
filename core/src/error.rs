@@ -16,4 +16,7 @@ pub enum HammerError {
 
     #[error("Invalid access list: {0}")]
     InvalidAccessList(String),
+
+    #[error("Unsupported transaction: {0}")]
+    UnsupportedTransaction(String),
 }
