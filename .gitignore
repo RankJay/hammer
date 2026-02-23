@@ -1,3 +1,6 @@
 /target
 .cursor/
 .ai/
+
+# Benchmarking
+benchmarks/

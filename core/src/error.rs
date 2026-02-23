@@ -20,3 +20,28 @@ pub enum HammerError {
     #[error("Unsupported transaction: {0}")]
     UnsupportedTransaction(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hammer_error_display_strings() {
+        assert_eq!(
+            HammerError::EvmExecution("bad".into()).to_string(),
+            "EVM execution failed: bad"
+        );
+        assert_eq!(
+            HammerError::InvalidCalldata("x".into()).to_string(),
+            "Invalid calldata: x"
+        );
+        assert_eq!(
+            HammerError::InvalidAccessList("y".into()).to_string(),
+            "Invalid access list: y"
+        );
+        assert_eq!(
+            HammerError::UnsupportedTransaction("z".into()).to_string(),
+            "Unsupported transaction: z"
+        );
+    }
+}

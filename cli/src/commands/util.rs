@@ -78,6 +78,87 @@ mod tests {
     use super::*;
     use alloy_primitives::{Address, B256};
 
+    // --- parse_u256 edge cases ---
+
+    #[test]
+    fn test_parse_u256_zero_decimal() {
+        let v = parse_u256("0").unwrap();
+        assert_eq!(v, U256::ZERO);
+    }
+
+    #[test]
+    fn test_parse_u256_zero_hex() {
+        let v = parse_u256("0x0").unwrap();
+        assert_eq!(v, U256::ZERO);
+    }
+
+    #[test]
+    fn test_parse_u256_uppercase_hex_prefix() {
+        let v = parse_u256("0XFF").unwrap();
+        assert_eq!(v, U256::from(255u64));
+    }
+
+    #[test]
+    fn test_parse_u256_invalid_decimal() {
+        assert!(parse_u256("abc").is_err());
+    }
+
+    #[test]
+    fn test_parse_u256_invalid_hex() {
+        assert!(parse_u256("0xgg").is_err());
+    }
+
+    #[test]
+    fn test_parse_u256_negative_rejected() {
+        // Negative numbers have no meaning in U256 decimal parsing.
+        assert!(parse_u256("-1").is_err());
+    }
+
+    // --- parse_hex_bytes edge cases ---
+
+    #[test]
+    fn test_parse_hex_bytes_odd_length_rejected() {
+        // "0x1" is odd-length hex after stripping prefix → invalid.
+        assert!(parse_hex_bytes("0x1").is_err());
+    }
+
+    #[test]
+    fn test_parse_hex_bytes_no_prefix() {
+        // Without "0x" prefix: the whole string is treated as raw hex.
+        assert_eq!(
+            parse_hex_bytes("deadbeef").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+    }
+
+    #[test]
+    fn test_parse_hex_bytes_uppercase() {
+        assert_eq!(
+            parse_hex_bytes("0xDEADBEEF").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+    }
+
+    // --- parse_block_id edge cases ---
+
+    #[test]
+    fn test_parse_block_id_zero() {
+        let id = parse_block_id("0").unwrap();
+        assert_eq!(id, BlockId::number(0));
+    }
+
+    #[test]
+    fn test_parse_block_id_max_u64() {
+        let id = parse_block_id(&u64::MAX.to_string()).unwrap();
+        assert_eq!(id, BlockId::number(u64::MAX));
+    }
+
+    #[test]
+    fn test_parse_block_id_pending_case_insensitive() {
+        let id = parse_block_id("PENDING").unwrap();
+        assert_eq!(id, BlockId::pending());
+    }
+
     // --- assert_post_berlin ---
 
     #[test]

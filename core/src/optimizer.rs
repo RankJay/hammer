@@ -255,4 +255,122 @@ mod tests {
         assert!(!result.removed_addresses.contains(&normal));
         assert_eq!(result.list.0.len(), 1);
     }
+
+    // --- additional coverage ---
+
+    #[test]
+    fn test_from_equals_to_stripped_once() {
+        // When tx.from == tx.to (self-call), the address appears in warm set once.
+        // It must be stripped regardless of whether it's the "from" or "to" role.
+        let same = addr(1);
+        let coinbase = addr(3);
+        let result = optimize(
+            raw(vec![item(same, vec![slot(1)])], vec![]),
+            same,
+            same,
+            coinbase,
+        );
+        assert!(result.list.0.is_empty());
+        assert!(result.removed_addresses.contains(&same));
+    }
+
+    #[test]
+    fn test_from_equals_coinbase_both_stripped() {
+        // When tx.from == coinbase, the address should still be stripped.
+        let from_cb = addr(5);
+        let to = addr(10);
+        let result = optimize(
+            raw(vec![item(from_cb, vec![])], vec![]),
+            from_cb,
+            to,
+            from_cb,
+        );
+        assert!(result.list.0.is_empty());
+        assert!(result.removed_addresses.contains(&from_cb));
+    }
+
+    #[test]
+    fn test_empty_raw_access_list() {
+        // No items in the raw list → empty output, no removed addresses.
+        let from = addr(1);
+        let to = addr(2);
+        let coinbase = addr(3);
+        let result = optimize(raw(vec![], vec![]), from, to, coinbase);
+        assert!(result.list.0.is_empty());
+        assert!(result.removed_addresses.is_empty());
+    }
+
+    #[test]
+    fn test_all_warm_produces_empty_output() {
+        // Every entry is warm (from, to, coinbase, precompile, created contract).
+        let from = addr(20);
+        let to = addr(21);
+        let coinbase = addr(22);
+        let created = addr(50);
+        let precompile = addr(1); // 0x01
+
+        let items = vec![
+            item(from, vec![]),
+            item(to, vec![]),
+            item(coinbase, vec![]),
+            item(precompile, vec![]),
+            item(created, vec![]),
+        ];
+        let result = optimize(raw(items, vec![created]), from, to, coinbase);
+        assert!(result.list.0.is_empty());
+        assert_eq!(result.removed_addresses.len(), 5);
+    }
+
+    #[test]
+    fn test_address_with_no_slots_kept_when_not_warm() {
+        // A non-warm address with an empty slot list should be retained in the output.
+        // The condition `!slots.is_empty() || !optimized.contains_key(&addr)` ensures
+        // the address is inserted even with zero slots.
+        let from = addr(1);
+        let to = addr(2);
+        let coinbase = addr(3);
+        let normal = addr(50);
+        let result = optimize(raw(vec![item(normal, vec![])], vec![]), from, to, coinbase);
+        assert_eq!(result.list.0.len(), 1);
+        assert_eq!(result.list.0[0].address, normal);
+        assert!(result.list.0[0].storage_keys.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_created_contracts_all_stripped() {
+        let from = addr(1);
+        let to = addr(2);
+        let coinbase = addr(3);
+        let created1 = addr(60);
+        let created2 = addr(61);
+        let normal = addr(50);
+        let items = vec![
+            item(created1, vec![slot(1)]),
+            item(created2, vec![slot(2)]),
+            item(normal, vec![slot(3)]),
+        ];
+        let result = optimize(raw(items, vec![created1, created2]), from, to, coinbase);
+        assert_eq!(result.list.0.len(), 1);
+        assert_eq!(result.list.0[0].address, normal);
+        assert!(result.removed_addresses.contains(&created1));
+        assert!(result.removed_addresses.contains(&created2));
+    }
+
+    #[test]
+    fn test_precompile_boundary_addresses() {
+        // 0x0a (10) is a precompile; 0x0b (11) is not.
+        let from = addr(20);
+        let to = addr(21);
+        let coinbase = addr(22);
+        let boundary_precompile = addr(10); // last precompile
+        let just_outside = addr(11); // first non-precompile
+        let items = vec![
+            item(boundary_precompile, vec![]),
+            item(just_outside, vec![]),
+        ];
+        let result = optimize(raw(items, vec![]), from, to, coinbase);
+        assert_eq!(result.list.0.len(), 1);
+        assert_eq!(result.list.0[0].address, just_outside);
+        assert!(result.removed_addresses.contains(&boundary_precompile));
+    }
 }

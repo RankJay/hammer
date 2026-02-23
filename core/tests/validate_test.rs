@@ -159,6 +159,117 @@ fn test_validate_replay_disables_nonce_check() {
     );
 }
 
+/// validate() must fail (return Err) when nonce doesn't match, unlike validate_replay().
+#[test]
+fn test_validate_wrong_nonce_returns_error() {
+    let from = addr(100);
+    let to = addr(101);
+    let coinbase = addr(50);
+    let db = funded_db(from);
+
+    // nonce 999 doesn't match account nonce (0) → EVM rejects the tx.
+    let tx = default_tx(from, to, 999);
+    let result = validate(db, tx, default_block(coinbase), AccessList::default());
+    // validate() does NOT disable nonce checks, so this should error.
+    assert!(
+        result.is_err(),
+        "validate() with wrong nonce must return Err"
+    );
+}
+
+/// Declaring a slot duplicate for a real contract access produces a Duplicate entry.
+#[test]
+fn test_validate_duplicate_declared_slot_flagged() {
+    let from = addr(100);
+    let to = addr(101);
+    let coinbase = addr(50);
+
+    // Deploy a contract at `to` that reads slot 0.
+    let mut db = funded_db(from);
+    db.insert_account_info(
+        to,
+        AccountInfo {
+            code: Some(sload_slot0_bytecode()),
+            nonce: 1,
+            ..Default::default()
+        },
+    );
+    db.insert_account_storage(to, U256::ZERO, U256::from(42u64))
+        .unwrap();
+
+    // Declare tx.to with slot(0) duplicated.
+    // tx.to is warm-by-default, so both the address and both slot copies are redundant/duplicate.
+    let slot_zero = alloy_primitives::B256::ZERO;
+    let declared = AccessList(vec![AccessListItem {
+        address: to,
+        storage_keys: vec![slot_zero, slot_zero],
+    }]);
+
+    let report = validate(
+        db,
+        default_tx(from, to, 0),
+        default_block(coinbase),
+        declared,
+    );
+    assert!(report.is_ok(), "validate() error: {:?}", report.err());
+    let report = report.unwrap();
+    assert!(
+        !report.is_valid,
+        "duplicate slot should make report invalid"
+    );
+    // The address is tx.to (Redundant) and the slot is duplicated (Duplicate).
+    let has_redundant = report
+        .entries
+        .iter()
+        .any(|e| matches!(e, hammer_core::DiffEntry::Redundant { .. }));
+    let has_duplicate = report
+        .entries
+        .iter()
+        .any(|e| matches!(e, hammer_core::DiffEntry::Duplicate { .. }));
+    assert!(has_redundant, "expected Redundant for tx.to");
+    assert!(has_duplicate, "expected Duplicate for repeated slot");
+}
+
+/// validate_replay() with a SLOAD contract as tx.to: the optimizer strips tx.to, so the
+/// optimal list is empty and an empty declared list is valid. This verifies that
+/// validate_replay() succeeds with a mismatched nonce (the replay nonce-skip path) and
+/// that the strip-tx.to logic applies the same way as in validate().
+#[test]
+fn test_validate_replay_sload_contract_as_tx_to_stripped() {
+    let from = addr(100);
+    let third = addr(102);
+    let coinbase = addr(50);
+
+    // `third` is used directly as tx.to. It has SLOAD bytecode and a non-zero slot.
+    // Because `third` == tx.to it is warm by default and the optimizer strips it.
+    // Optimal list is therefore empty; empty declared matches → report is valid.
+    let mut db = funded_db(from);
+    db.insert_account_info(
+        third,
+        AccountInfo {
+            code: Some(sload_slot0_bytecode()),
+            nonce: 1,
+            ..Default::default()
+        },
+    );
+    db.insert_account_storage(third, U256::ZERO, U256::from(7u64))
+        .unwrap();
+
+    let tx = default_tx(from, third, 999); // wrong nonce — replay must ignore it
+    let report = validate_replay(db, tx, default_block(coinbase), AccessList::default());
+    assert!(
+        report.is_ok(),
+        "validate_replay() error: {:?}",
+        report.err()
+    );
+    // `third` is tx.to → stripped → optimal is empty → declared empty → valid.
+    let report = report.unwrap();
+    assert!(
+        report.is_valid,
+        "empty declared vs empty optimal must be valid in replay"
+    );
+}
+
 /// Passing a declared list containing tx.from or tx.to should produce Redundant entries.
 #[test]
 fn test_validate_redundant_warm_addresses_flagged() {

@@ -139,4 +139,76 @@ mod tests {
         // Net savings per address: cold account (2600) - address upfront (2400) = 200
         assert_eq!(NET_SAVINGS_PER_ACCESSED_ADDRESS, 200);
     }
+
+    // gas_to_eth edge cases
+
+    #[test]
+    fn test_gas_to_eth_zero_gas_price() {
+        // Zero gas price → zero ETH regardless of gas amount.
+        assert_eq!(gas_to_eth(1_000_000, 0), 0.0);
+    }
+
+    #[test]
+    fn test_gas_to_eth_one_gwei() {
+        // 21000 gas at 1 gwei = 0.000021 ETH
+        let result = gas_to_eth(21_000, 1);
+        assert!((result - 0.000_021).abs() < 1e-12);
+    }
+
+    // access_list_gas_cost edge cases
+
+    #[test]
+    fn test_duplicate_slots_within_item_still_counted() {
+        // gas cost is mechanical: slot count × SLOT_COST, duplicates are not deduplicated here.
+        let list = AccessList(vec![AccessListItem {
+            address: addr(1),
+            storage_keys: vec![slot(1), slot(1)],
+        }]);
+        // Two slot entries, even though both are the same key.
+        assert_eq!(
+            access_list_gas_cost(&list),
+            ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST
+        );
+    }
+
+    #[test]
+    fn test_address_only_no_slots_many_addresses() {
+        // Five addresses with no slots: cost = 5 × ADDRESS_COST.
+        let list = AccessList(
+            (1u8..=5)
+                .map(|n| AccessListItem {
+                    address: addr(n),
+                    storage_keys: vec![],
+                })
+                .collect(),
+        );
+        assert_eq!(access_list_gas_cost(&list), 5 * ACCESS_LIST_ADDRESS_COST);
+    }
+
+    #[test]
+    fn test_single_address_many_slots() {
+        // One address with 10 slots.
+        let list = AccessList(vec![AccessListItem {
+            address: addr(1),
+            storage_keys: (0u8..10).map(slot).collect(),
+        }]);
+        assert_eq!(
+            access_list_gas_cost(&list),
+            ACCESS_LIST_ADDRESS_COST + 10 * ACCESS_LIST_STORAGE_KEY_COST
+        );
+    }
+
+    #[test]
+    fn test_gas_to_eth_large_gas_no_panic() {
+        // u64::MAX gas at 1000 gwei: uses f64 arithmetic so no integer overflow.
+        let result = gas_to_eth(u64::MAX, 1000);
+        assert!(result.is_finite(), "expected finite result, got {}", result);
+    }
+
+    #[test]
+    fn test_gas_to_eth_large_gas_price_no_panic() {
+        // 21000 gas at u64::MAX gwei: uses f64 arithmetic so no integer overflow.
+        let result = gas_to_eth(21_000, u64::MAX);
+        assert!(result.is_finite(), "expected finite result, got {}", result);
+    }
 }

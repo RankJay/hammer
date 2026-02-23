@@ -191,6 +191,71 @@ mod tests {
     }
 
     #[test]
+    fn test_diff_entry_serde_all_variants() {
+        let cases: &[(&str, DiffEntry)] = &[
+            (
+                "missing",
+                DiffEntry::Missing {
+                    address: addr(1),
+                    storage_keys: vec![slot(1)],
+                    gas_waste: 2000,
+                },
+            ),
+            (
+                "stale",
+                DiffEntry::Stale {
+                    address: addr(2),
+                    storage_keys: vec![slot(2)],
+                    gas_waste: 1900,
+                },
+            ),
+            (
+                "incomplete",
+                DiffEntry::Incomplete {
+                    address: addr(3),
+                    missing_slots: vec![slot(3)],
+                    gas_waste: 2000,
+                },
+            ),
+            (
+                "redundant",
+                DiffEntry::Redundant {
+                    address: addr(4),
+                    gas_waste: 2400,
+                },
+            ),
+            (
+                "duplicate",
+                DiffEntry::Duplicate {
+                    address: addr(5),
+                    storage_key: slot(5),
+                    gas_waste: 1900,
+                },
+            ),
+        ];
+
+        for (expected_kind, entry) in cases {
+            let json = serde_json::to_string(entry).unwrap();
+            let expected_tag = format!(r#""kind":"{}""#, expected_kind);
+            assert!(
+                json.contains(&expected_tag),
+                "variant {:?}: expected tag {}, got {}",
+                expected_kind,
+                expected_tag,
+                json
+            );
+            // Roundtrip: deserializing must succeed and preserve the kind tag.
+            let decoded: DiffEntry = serde_json::from_str(&json).unwrap();
+            let json2 = serde_json::to_string(&decoded).unwrap();
+            assert_eq!(
+                json, json2,
+                "serde roundtrip failed for kind {:?}",
+                expected_kind
+            );
+        }
+    }
+
+    #[test]
     fn test_validation_report_serde_roundtrip() {
         let report = ValidationReport {
             entries: vec![DiffEntry::Redundant {

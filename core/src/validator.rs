@@ -692,6 +692,118 @@ mod tests {
         );
     }
 
+    // --- additional coverage ---
+
+    #[test]
+    fn test_duplicate_slot_across_two_items_same_address() {
+        // Same address appears in two separate AccessListItems, each with the same slot.
+        // The duplicate detection must catch the slot duplicated across items.
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared = AccessList(vec![
+            AccessListItem {
+                address: contract_a(),
+                storage_keys: vec![slot(1)],
+            },
+            AccessListItem {
+                address: contract_a(),
+                storage_keys: vec![slot(1)], // same slot in a second item
+            },
+        ]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert!(
+            report
+                .entries
+                .iter()
+                .any(|e| matches!(e, DiffEntry::Duplicate { .. })),
+            "expected Duplicate entry for slot repeated across two AccessListItems"
+        );
+    }
+
+    #[test]
+    fn test_precompile_with_storage_slots_is_redundant() {
+        // Precompile included with storage keys: entire entry (address + slots) is redundant.
+        let precompile = addr(2); // 0x02 — SHA2-256 precompile
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared(vec![(precompile, vec![slot(1), slot(2)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let redundant = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Redundant { address, .. } if *address == precompile))
+            .expect("expected Redundant entry for precompile");
+        assert_eq!(
+            redundant.gas_waste(),
+            ACCESS_LIST_ADDRESS_COST + 2 * ACCESS_LIST_STORAGE_KEY_COST
+        );
+    }
+
+    #[test]
+    fn test_tx_from_equals_tx_to_flagged_as_redundant() {
+        // Self-call: tx.from == tx.to. Declaring that address should still produce Redundant.
+        let self_addr = addr(99);
+        let coinbase = coinbase_addr();
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared(vec![(self_addr, vec![])]);
+        let report = validate(&declared, &optimal, self_addr, self_addr, coinbase);
+        assert!(
+            report.entries.iter().any(
+                |e| matches!(e, DiffEntry::Redundant { address, .. } if *address == self_addr)
+            ),
+            "expected Redundant for self_addr when tx.from == tx.to"
+        );
+    }
+
+    #[test]
+    fn test_multiple_missing_addresses() {
+        // Optimal needs three addresses; declared is empty → three Missing entries.
+        let optimal = make_optimal(vec![
+            (contract_a(), vec![slot(1)]),
+            (contract_b(), vec![slot(2)]),
+            (addr(22), vec![slot(3)]),
+        ]);
+        let declared = make_declared(vec![]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let missing_count = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, DiffEntry::Missing { .. }))
+            .count();
+        assert_eq!(missing_count, 3, "expected 3 Missing entries");
+    }
+
+    #[test]
+    fn test_declared_address_only_no_slots_not_in_optimal_is_stale() {
+        // Declared has an address with no slots that isn't in the optimal list.
+        // This is the else-branch in validator: stale address with empty slot set.
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared(vec![(contract_a(), vec![])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let stale = report
+            .entries
+            .iter()
+            .find(|e| matches!(e, DiffEntry::Stale { address, .. } if *address == contract_a()))
+            .expect("expected Stale for address-only entry not in optimal");
+        // gas_waste = ADDRESS_COST + 0 * SLOT_COST = 2400
+        assert_eq!(stale.gas_waste(), ACCESS_LIST_ADDRESS_COST);
+    }
+
+    #[test]
+    fn test_all_precompiles_declared_all_redundant() {
+        // All 10 precompiles declared with no slots → 10 Redundant entries.
+        let optimal = make_optimal(vec![]);
+        let declared = make_declared((1u8..=10).map(|n| (addr(n), vec![])).collect());
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        let redundant_count = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, DiffEntry::Redundant { .. }))
+            .count();
+        assert_eq!(
+            redundant_count, 10,
+            "all 10 precompiles should be Redundant"
+        );
+    }
+
     #[test]
     fn test_optimality_incomplete_and_stale_same_address() {
         // contract_a: optimal needs {s1, s2}, declared has {s1, s3}.
@@ -730,5 +842,56 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stale.gas_waste(), ACCESS_LIST_STORAGE_KEY_COST);
+    }
+
+    #[test]
+    fn test_is_valid_iff_entries_empty() {
+        // Valid: declared matches optimal exactly.
+        let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared = make_declared(vec![(contract_a(), vec![slot(1)])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert_eq!(
+            report.is_valid,
+            report.entries.is_empty(),
+            "is_valid must be true iff entries is empty (valid case)"
+        );
+
+        // Invalid: declared is missing the address.
+        let optimal2 = make_optimal(vec![(contract_a(), vec![slot(1)])]);
+        let declared2 = make_declared(vec![]);
+        let report2 = validate(
+            &declared2,
+            &optimal2,
+            from_addr(),
+            to_addr(),
+            coinbase_addr(),
+        );
+        assert_eq!(
+            report2.is_valid,
+            report2.entries.is_empty(),
+            "is_valid must be false iff entries is non-empty (invalid case)"
+        );
+        assert!(!report2.entries.is_empty());
+    }
+
+    #[test]
+    fn test_no_list_cost_formula() {
+        // 1 address, 0 slots: no_list_cost = COLD_ACCOUNT_ACCESS_COST + 0 * COLD_SLOAD_COST
+        let optimal = make_optimal(vec![(contract_a(), vec![])]);
+        let declared = make_declared(vec![(contract_a(), vec![])]);
+        let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
+        assert_eq!(report.gas_summary.no_list_cost, COLD_ACCOUNT_ACCESS_COST);
+
+        // 0 addresses: no_list_cost = 0
+        let optimal2 = make_optimal(vec![]);
+        let declared2 = make_declared(vec![]);
+        let report2 = validate(
+            &declared2,
+            &optimal2,
+            from_addr(),
+            to_addr(),
+            coinbase_addr(),
+        );
+        assert_eq!(report2.gas_summary.no_list_cost, 0);
     }
 }

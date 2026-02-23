@@ -19,6 +19,16 @@ pub struct CompareArgs {
     pub tx_hash: String,
 }
 
+/// Run the compare command.
+///
+/// # Test boundary
+///
+/// This function requires a live RPC connection and cannot be unit tested in isolation.
+/// Its guard logic (`assert_not_create`, `assert_not_blob`, `assert_post_berlin`) is
+/// covered by unit tests in `cli::commands::util`. The diffing and report formatting
+/// delegates entirely to `validate_replay()` + `ValidationReport`, which are covered
+/// exhaustively in `hammer_core::validator` tests. End-to-end behaviour is verified
+/// by the CLI integration tests in `cli/tests/cli_test.rs` (error-path only, no RPC).
 pub async fn run(args: CompareArgs) -> Result<()> {
     let tx_hash = args.tx_hash.parse().wrap_err("invalid tx hash")?;
 
