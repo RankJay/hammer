@@ -2193,6 +2193,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "eyre",
+ "futures",
  "hammer-core",
  "hex",
  "predicates",

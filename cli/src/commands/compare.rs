@@ -1,7 +1,7 @@
 use alloy_eips::BlockId;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
-use alloy_rpc_types_eth::TransactionTrait;
+use alloy_rpc_types_eth::{TransactionRequest, TransactionTrait};
 use clap::Args;
 use eyre::{Context, Result};
 use hammer_core::validate_replay;
@@ -38,10 +38,21 @@ pub async fn run(args: CompareArgs) -> Result<()> {
         .connect_http(url)
         .erased();
 
-    let tx = provider
-        .get_transaction_by_hash(tx_hash)
-        .await?
-        .ok_or_else(|| eyre::eyre!("Transaction not found"))?;
+    // Fetch tx and receipt in parallel — both need only the tx hash.
+    let (tx, receipt) = tokio::try_join!(
+        async {
+            provider
+                .get_transaction_by_hash(tx_hash)
+                .await?
+                .ok_or_else(|| eyre::eyre!("Transaction not found"))
+        },
+        async {
+            provider
+                .get_transaction_receipt(tx_hash)
+                .await?
+                .ok_or_else(|| eyre::eyre!("Receipt not found"))
+        },
+    )?;
 
     // Guard 1: Reject contract creation transactions
     assert_not_create(tx.inner.to())?;
@@ -50,16 +61,13 @@ pub async fn run(args: CompareArgs) -> Result<()> {
     assert_not_blob(tx.inner.blob_versioned_hashes())?;
 
     // Guard 4: Reject reverted transactions
-    let block_hash = tx
-        .block_hash
-        .ok_or_else(|| eyre::eyre!("Transaction not mined"))?;
-    let receipt = provider
-        .get_transaction_receipt(tx_hash)
-        .await?
-        .ok_or_else(|| eyre::eyre!("Receipt not found"))?;
     if !receipt.status() {
         eyre::bail!("transaction reverted on-chain — access list comparison is not meaningful for failed transactions");
     }
+
+    let block_hash = tx
+        .block_hash
+        .ok_or_else(|| eyre::eyre!("Transaction not mined"))?;
     let block = provider
         .get_block_by_hash(block_hash)
         .await?
@@ -103,7 +111,7 @@ pub async fn run(args: CompareArgs) -> Result<()> {
         .gas_limit(tx.inner.gas_limit())
         .gas_price(gas_price)
         .value(value)
-        .data(data);
+        .data(data.clone());
 
     if let Some(priority) = tx.inner.max_priority_fee_per_gas() {
         builder = builder.gas_priority_fee(Some(priority));
@@ -111,12 +119,28 @@ pub async fn run(args: CompareArgs) -> Result<()> {
 
     let tx_env = builder.build().unwrap();
 
-    // Use block state; nonce check is disabled for replay.
+    // Build a TransactionRequest for the prefetch hint (eth_createAccessList).
+    let tx_req = TransactionRequest {
+        from: Some(from),
+        to: Some(TxKind::Call(to)),
+        value: Some(value),
+        input: alloy_rpc_types_eth::TransactionInput::new(data),
+        gas: Some(tx.inner.gas_limit()),
+        ..Default::default()
+    };
+
+    // Pre-warm the database: fetch all storage/account state in parallel before
+    // revm runs, eliminating sequential AlloyDB RPC calls during EVM execution.
     let state_block_id = BlockId::hash(block_hash);
-    let alloy_db = revm::database::AlloyDB::new(provider, state_block_id);
-    let async_db = revm::database_interface::WrapDatabaseAsync::new(alloy_db)
-        .ok_or_else(|| eyre::eyre!("WrapDatabaseAsync requires tokio runtime"))?;
-    let db = revm::database_interface::WrapDatabaseRef::from(async_db);
+    let db = super::prefetch::build(
+        provider,
+        state_block_id,
+        state_block_id,
+        tx_req,
+        &declared,
+    )
+    .await
+    .wrap_err("prefetch failed")?;
 
     let report = validate_replay(db, tx_env, block_env, declared).wrap_err("validation failed")?;
 
