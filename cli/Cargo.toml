@@ -11,7 +11,7 @@ path = "src/main.rs"
 alloy = { version = "1.7.3", features = ["providers", "transports", "transport-http", "rpc-types", "network", "eips"] }
 alloy-eips = "1.7.3"
 alloy-primitives = "1.5.7"
-alloy-provider = "1.7.3"
+alloy-provider = { version = "1.7.3", features = ["debug-api"] }
 alloy-rpc-types-eth = "1.7.3"
 hammer-core = { version = "0.1.0", path = "../core" }
 clap = { version = "4.5.60", features = ["derive"] }
@@ -24,6 +24,7 @@ tokio = { version = "1.49.0", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 futures = "0.3.32"
+alloy-rpc-types-trace = "1.7.3"
 
 [dev-dependencies]
 assert_cmd = "2.1.2"

@@ -1,5 +1,7 @@
+use alloy_eips::BlockId;
 use alloy_primitives::U256;
 use alloy_provider::Provider;
+use alloy_rpc_types_eth::TransactionRequest;
 use clap::Args;
 use eyre::{Context, Result};
 use hammer_core::{access_list_gas_cost, generate};
@@ -79,14 +81,30 @@ pub async fn run(args: GenerateArgs) -> Result<()> {
         .gas_limit(30_000_000)
         .gas_price(gas_price)
         .value(value)
-        .data(data.into())
+        .data(data.clone().into())
         .build()
         .unwrap();
 
-    let alloy_db = revm::database::AlloyDB::new(provider, block_id);
-    let async_db = revm::database_interface::WrapDatabaseAsync::new(alloy_db)
-        .ok_or_else(|| eyre::eyre!("WrapDatabaseAsync requires tokio runtime"))?;
-    let db = revm::database_interface::WrapDatabaseRef::from(async_db);
+    let tx_req = TransactionRequest {
+        from: Some(from),
+        to: Some(TxKind::Call(to)),
+        value: Some(value),
+        input: alloy_rpc_types_eth::TransactionInput::new(data.into()),
+        gas: Some(30_000_000),
+        ..Default::default()
+    };
+
+    let state_block_id = BlockId::hash(header.hash);
+
+    let db = super::prefetch::build(
+        provider,
+        state_block_id,
+        state_block_id,
+        tx_req,
+        &alloy_rpc_types_eth::AccessList::default(),
+    )
+    .await
+    .wrap_err("prefetch failed")?;
 
     let optimal = generate(db, tx_env, block_env).wrap_err("access list generation failed")?;
 

@@ -1,36 +1,41 @@
-//! Pre-warm a CacheDB by fetching storage and account state in parallel before
-//! handing the database to revm. Cuts wall time for multi-hop transactions from
-//! seconds (sequential AlloyDB RPC calls during EVM execution) to near-zero
-//! (cache hits during execution after one parallel batch upfront).
+//! Pre-warm a CacheDB by fetching the complete pre-execution state before
+//! handing the database to revm. Cuts wall time for complex transactions from
+//! tens of seconds (sequential AlloyDB RPC calls during EVM execution) to
+//! near-zero (cache hits after one parallel batch upfront).
 //!
-//! Strategy: call `eth_createAccessList` at the target block to get the node's
-//! best-effort access list hint, then fan out all storage and account fetches
-//! concurrently, populate a `CacheDB<AlloyDB>`, and return it. revm hits the
-//! cache on almost every slot; any residual misses fall through to AlloyDB
-//! normally — correctness is unaffected.
+//! Strategy: call `debug_traceCall` with `prestateTracer` to get the node's
+//! complete pre-execution state for every address and storage slot the
+//! transaction will touch, then populate a `CacheDB<AlloyDB>` and return it.
+//! revm hits the cache on every access; any residual misses fall through to
+//! AlloyDB normally — correctness is unaffected.
+//!
+//! Falls back to the `eth_createAccessList` hint + parallel fetch approach if
+//! the node does not support `debug_traceCall` (e.g. Infura).
 
 use alloy::network::Ethereum;
 use alloy_eips::BlockId;
 use alloy_primitives::{Address, U256};
 use alloy_provider::{DynProvider, Provider};
 use alloy_rpc_types_eth::{AccessList, AccessListItem, TransactionRequest};
+use alloy_rpc_types_trace::geth::{
+    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
+    GethDebugTracingOptions,
+    pre_state::PreStateFrame,
+};
 use futures::future::join_all;
 use revm::database::{AlloyDB, CacheDB};
 use revm::database_interface::{WrapDatabaseAsync, WrapDatabaseRef};
 use revm::state::{AccountInfo, Bytecode};
 use revm::primitives::KECCAK_EMPTY;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub type PrewarmedDB = CacheDB<WrapDatabaseRef<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider<Ethereum>>>>>;
 
-/// Build a pre-warmed `CacheDB` for the given transaction replayed at `state_block`.
+/// Build a pre-warmed `CacheDB` for the given transaction at `state_block`.
 ///
-/// `hint_block` is the `BlockId` used for `eth_createAccessList` — the block hash
-/// of the block containing the transaction so the node simulates against the
-/// correct pre-execution state.
-///
-/// Falls back gracefully if `eth_createAccessList` is unsupported: only the
-/// `declared` list entries are prefetched. Either way correctness is unchanged.
+/// Tries `debug_traceCall` with `prestateTracer` first (one RPC call, 100%
+/// coverage). Falls back to `eth_createAccessList` + parallel fetch if the
+/// node doesn't support the debug namespace.
 pub async fn build(
     provider: DynProvider<Ethereum>,
     state_block: BlockId,
@@ -38,105 +43,153 @@ pub async fn build(
     tx_req: TransactionRequest,
     declared: &AccessList,
 ) -> eyre::Result<PrewarmedDB> {
-    // Ask the node for its access list hint. On failure fall back to declared only.
-    let node_hint: Option<AccessList> = provider
-        .create_access_list(&tx_req)
-        .block_id(hint_block)
-        .await
-        .ok()
-        .map(|r| r.access_list);
+    use alloy_provider::ext::DebugApi;
 
-    // Union node hint + declared list to maximise cache coverage.
-    let hint_list = merge_access_lists(node_hint.as_ref(), declared);
+    let trace_opts = GethDebugTracingCallOptions {
+        tracing_options: GethDebugTracingOptions {
+            tracer: Some(GethDebugTracerType::BuiltInTracer(
+                GethDebugBuiltInTracerType::PreStateTracer,
+            )),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
-    // Collect unique addresses and their storage keys.
-    let mut addr_slots: HashMap<Address, HashSet<U256>> = HashMap::new();
-    for item in hint_list.0.iter() {
-        let entry = addr_slots.entry(item.address).or_default();
-        for key in &item.storage_keys {
-            entry.insert(U256::from_be_bytes(key.0));
-        }
-    }
+    // One RPC call returns every account + storage slot the tx will touch.
+    let pre_state_map: Option<BTreeMap<Address, alloy_rpc_types_trace::geth::pre_state::AccountState>> =
+        provider
+            .debug_trace_call_prestate(tx_req.clone(), hint_block, trace_opts)
+            .await
+            .ok()
+            .and_then(|frame| match frame {
+                PreStateFrame::Default(mode) => Some(mode.0),
+                _ => None,
+            });
 
-    let addresses: Vec<Address> = addr_slots.keys().copied().collect();
-
-    // Per-address: fetch balance, nonce, code — all concurrently.
-    let account_futs: Vec<_> = addresses
-        .iter()
-        .map(|&addr| {
-            let p = provider.clone();
-            let b = state_block;
-            async move {
-                let (balance, nonce, code) = tokio::join!(
-                    async { p.get_balance(addr).block_id(b).await.unwrap_or(U256::ZERO) },
-                    async { p.get_transaction_count(addr).block_id(b).await.unwrap_or(0) },
-                    async { p.get_code_at(addr).block_id(b).await.unwrap_or_default() },
-                );
-                (addr, balance, nonce, code)
-            }
-        })
-        .collect();
-
-    // Per-(address, slot): fetch storage values — all concurrently.
-    // Collect into a plain Vec to avoid capturing `provider` in nested closures.
-    let storage_tasks: Vec<(Address, U256)> = addr_slots
-        .iter()
-        .flat_map(|(&addr, slots)| slots.iter().map(move |&slot| (addr, slot)))
-        .collect();
-
-    let storage_futs: Vec<_> = storage_tasks
-        .into_iter()
-        .map(|(addr, slot)| {
-            let p = provider.clone();
-            let b = state_block;
-            async move {
-                let value = p
-                    .get_storage_at(addr, slot)
-                    .block_id(b)
-                    .await
-                    .unwrap_or(U256::ZERO);
-                (addr, slot, value)
-            }
-        })
-        .collect();
-
-    let (account_results, storage_results) =
-        tokio::join!(join_all(account_futs), join_all(storage_futs));
-
-    // Build underlying AlloyDB stack (same as the non-prefetched path in compare.rs).
-    let alloy_db = AlloyDB::new(provider, state_block);
+    // Build the underlying AlloyDB stack.
+    let alloy_db = AlloyDB::new(provider.clone(), state_block);
     let async_db = WrapDatabaseAsync::new(alloy_db)
         .ok_or_else(|| eyre::eyre!("WrapDatabaseAsync requires tokio runtime"))?;
     let inner = WrapDatabaseRef::from(async_db);
     let mut cache_db = CacheDB::new(inner);
 
-    // Insert account info — insert_account_info handles code hash + contracts map.
-    for (addr, balance, nonce, code_bytes) in account_results {
-        let bytecode = if code_bytes.is_empty() {
-            Bytecode::default()
-        } else {
-            Bytecode::new_raw(code_bytes)
-        };
-        let code_hash = if bytecode.is_empty() {
-            KECCAK_EMPTY
-        } else {
-            bytecode.hash_slow()
-        };
-        let info = AccountInfo {
-            balance,
-            nonce,
-            code_hash,
-            code: Some(bytecode),
-            account_id: None,
-        };
-        cache_db.insert_account_info(addr, info);
-    }
+    if let Some(state) = pre_state_map {
+        // Populate the cache directly from the prestate — zero additional RPCs.
+        for (addr, account) in state {
+            let bytecode = account
+                .code
+                .filter(|b| !b.is_empty())
+                .map(Bytecode::new_raw)
+                .unwrap_or_default();
+            let code_hash = if bytecode.is_empty() {
+                KECCAK_EMPTY
+            } else {
+                bytecode.hash_slow()
+            };
+            cache_db.insert_account_info(
+                addr,
+                AccountInfo {
+                    balance: account.balance.unwrap_or(U256::ZERO),
+                    nonce: account.nonce.unwrap_or(0),
+                    code_hash,
+                    code: Some(bytecode),
+                    account_id: None,
+                },
+            );
+            for (slot, value) in account.storage {
+                let slot_u256 = U256::from_be_bytes(slot.0);
+                let value_u256 = U256::from_be_bytes(value.0);
+                let _ = cache_db.insert_account_storage(addr, slot_u256, value_u256);
+            }
+        }
+    } else {
+        // Fallback: eth_createAccessList hint + parallel fetch.
+        // Used when the node doesn't expose the debug namespace.
+        let node_hint: Option<AccessList> = provider
+            .create_access_list(&tx_req)
+            .block_id(hint_block)
+            .await
+            .ok()
+            .map(|r| r.access_list);
 
-    // Insert storage slots.
-    for (addr, slot, value) in storage_results {
-        // account info is already in cache from the loop above, so this is a
-        // pure in-memory write — no further RPC calls.
-        let _ = cache_db.insert_account_storage(addr, slot, value);
+        let hint_list = merge_access_lists(node_hint.as_ref(), declared);
+
+        let mut addr_slots: HashMap<Address, HashSet<U256>> = HashMap::new();
+        for item in hint_list.0.iter() {
+            let entry = addr_slots.entry(item.address).or_default();
+            for key in &item.storage_keys {
+                entry.insert(U256::from_be_bytes(key.0));
+            }
+        }
+
+        let addresses: Vec<Address> = addr_slots.keys().copied().collect();
+
+        let account_futs: Vec<_> = addresses
+            .iter()
+            .map(|&addr| {
+                let p = provider.clone();
+                let b = state_block;
+                async move {
+                    let (balance, nonce, code) = tokio::join!(
+                        async { p.get_balance(addr).block_id(b).await.unwrap_or(U256::ZERO) },
+                        async { p.get_transaction_count(addr).block_id(b).await.unwrap_or(0) },
+                        async { p.get_code_at(addr).block_id(b).await.unwrap_or_default() },
+                    );
+                    (addr, balance, nonce, code)
+                }
+            })
+            .collect();
+
+        let storage_tasks: Vec<(Address, U256)> = addr_slots
+            .iter()
+            .flat_map(|(&addr, slots)| slots.iter().map(move |&slot| (addr, slot)))
+            .collect();
+
+        let storage_futs: Vec<_> = storage_tasks
+            .into_iter()
+            .map(|(addr, slot)| {
+                let p = provider.clone();
+                let b = state_block;
+                async move {
+                    let value = p
+                        .get_storage_at(addr, slot)
+                        .block_id(b)
+                        .await
+                        .unwrap_or(U256::ZERO);
+                    (addr, slot, value)
+                }
+            })
+            .collect();
+
+        let (account_results, storage_results) =
+            tokio::join!(join_all(account_futs), join_all(storage_futs));
+
+        for (addr, balance, nonce, code_bytes) in account_results {
+            let bytecode = if code_bytes.is_empty() {
+                Bytecode::default()
+            } else {
+                Bytecode::new_raw(code_bytes)
+            };
+            let code_hash = if bytecode.is_empty() {
+                KECCAK_EMPTY
+            } else {
+                bytecode.hash_slow()
+            };
+            cache_db.insert_account_info(
+                addr,
+                AccountInfo {
+                    balance,
+                    nonce,
+                    code_hash,
+                    code: Some(bytecode),
+                    account_id: None,
+                },
+            );
+        }
+
+        for (addr, slot, value) in storage_results {
+            let _ = cache_db.insert_account_storage(addr, slot, value);
+        }
     }
 
     Ok(cache_db)
