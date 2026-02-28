@@ -71,11 +71,7 @@ fn find_successful_tx(url: &str) -> Option<String> {
         if tx_type == "0x2" && !to.is_empty() {
             let hash = tx["hash"].as_str()?;
             // Verify it succeeded by checking its receipt.
-            let receipt = jsonrpc(
-                url,
-                "eth_getTransactionReceipt",
-                serde_json::json!([hash]),
-            );
+            let receipt = jsonrpc(url, "eth_getTransactionReceipt", serde_json::json!([hash]));
             if receipt["result"]["status"].as_str() == Some("0x1") {
                 return Some(hash.to_owned());
             }
@@ -100,11 +96,7 @@ fn find_reverted_tx(url: &str) -> Option<String> {
             let to = tx["to"].as_str().unwrap_or("");
             if tx_type == "0x2" && !to.is_empty() {
                 let hash = tx["hash"].as_str()?;
-                let receipt = jsonrpc(
-                    url,
-                    "eth_getTransactionReceipt",
-                    serde_json::json!([hash]),
-                );
+                let receipt = jsonrpc(url, "eth_getTransactionReceipt", serde_json::json!([hash]));
                 if receipt["result"]["status"].as_str() == Some("0x0") {
                     return Some(hash.to_owned());
                 }
@@ -127,8 +119,7 @@ const PLAIN_EOA: &str = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B";
 const TX_BLOB: &str = "0x110d6d8888ced3615a7ca07d91acd9eebc4e61f669d83fd2e7f42de1ac7d39a3";
 
 // A made-up but valid-format hash — guaranteed not to exist on any chain.
-const TX_NONEXISTENT: &str =
-    "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+const TX_NONEXISTENT: &str = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
 // Pinned block for generate/validate tests.
 // Must be post-Cancun (≥ 19,426,588) because revm requires `excess_blob_gas` to be set
@@ -149,15 +140,23 @@ fn test_generate_json_output_is_valid_json() {
     let output = hammer()
         .args([
             "generate",
-            "--from", VITALIK,
-            "--to", UNISWAP_V3_ROUTER,
-            "--block", PINNED_BLOCK,
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            UNISWAP_V3_ROUTER,
+            "--block",
+            PINNED_BLOCK,
+            "--rpc-url",
+            &url,
         ])
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "expected exit 0, got: {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "expected exit 0, got: {:?}",
+        output.status
+    );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!stdout.trim().is_empty(), "stdout must not be empty");
@@ -169,7 +168,10 @@ fn test_generate_json_output_is_valid_json() {
     // Every element must have `address` and `storageKeys`.
     for item in arr {
         assert!(item["address"].is_string(), "each entry needs 'address'");
-        assert!(item["storageKeys"].is_array(), "each entry needs 'storageKeys'");
+        assert!(
+            item["storageKeys"].is_array(),
+            "each entry needs 'storageKeys'"
+        );
     }
 }
 
@@ -181,11 +183,16 @@ fn test_generate_human_output_format() {
     hammer()
         .args([
             "generate",
-            "--from", VITALIK,
-            "--to", UNISWAP_V3_ROUTER,
-            "--block", PINNED_BLOCK,
-            "--output", "human",
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            UNISWAP_V3_ROUTER,
+            "--block",
+            PINNED_BLOCK,
+            "--output",
+            "human",
+            "--rpc-url",
+            &url,
         ])
         .assert()
         .success()
@@ -200,10 +207,14 @@ fn test_generate_block_number_flag() {
     let output = hammer()
         .args([
             "generate",
-            "--from", VITALIK,
-            "--to", UNISWAP_V3_ROUTER,
-            "--block", PINNED_BLOCK,
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            UNISWAP_V3_ROUTER,
+            "--block",
+            PINNED_BLOCK,
+            "--rpc-url",
+            &url,
         ])
         .output()
         .unwrap();
@@ -232,10 +243,14 @@ fn test_generate_then_validate_is_correct() {
     let gen_output = hammer()
         .args([
             "generate",
-            "--from", VITALIK,
-            "--to", UNISWAP_V3_ROUTER,
-            "--block", PINNED_BLOCK,
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            UNISWAP_V3_ROUTER,
+            "--block",
+            PINNED_BLOCK,
+            "--rpc-url",
+            &url,
         ])
         .output()
         .unwrap();
@@ -267,11 +282,16 @@ fn test_generate_then_validate_is_correct() {
     let val_output = hammer()
         .args([
             "validate",
-            "--from", VITALIK,
-            "--to", UNISWAP_V3_ROUTER,
-            "--block", PINNED_BLOCK,
-            "--access-list", &list_path,
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            UNISWAP_V3_ROUTER,
+            "--block",
+            PINNED_BLOCK,
+            "--access-list",
+            &list_path,
+            "--rpc-url",
+            &url,
         ])
         .output()
         .unwrap();
@@ -318,11 +338,16 @@ fn test_validate_exit_0_on_empty_list_for_plain_transfer() {
     let output = hammer()
         .args([
             "validate",
-            "--from", VITALIK,
-            "--to", PLAIN_EOA,
-            "--block", PINNED_BLOCK,
-            "--access-list", &list_path,
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            PLAIN_EOA,
+            "--block",
+            PINNED_BLOCK,
+            "--access-list",
+            &list_path,
+            "--rpc-url",
+            &url,
         ])
         .output()
         .unwrap();
@@ -335,7 +360,10 @@ fn test_validate_exit_0_on_empty_list_for_plain_transfer() {
     );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"is_valid\": true"), "must report is_valid:true; got: {stdout}");
+    assert!(
+        stdout.contains("\"is_valid\": true"),
+        "must report is_valid:true; got: {stdout}"
+    );
 }
 
 /// A non-empty declared list for a plain ETH transfer (which needs no access list)
@@ -345,17 +373,23 @@ fn test_validate_exit_1_on_stale_list_for_plain_transfer() {
     require_rpc!(url);
 
     // A made-up address that will never be accessed by a plain ETH transfer.
-    let stale_list = r#"[{"address":"0x1234567890123456789012345678901234567890","storageKeys":[]}]"#;
+    let stale_list =
+        r#"[{"address":"0x1234567890123456789012345678901234567890","storageKeys":[]}]"#;
     let list_path = temp_file("hammer_rpc_stale_al.json", stale_list);
 
     let output = hammer()
         .args([
             "validate",
-            "--from", VITALIK,
-            "--to", PLAIN_EOA,
-            "--block", PINNED_BLOCK,
-            "--access-list", &list_path,
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            PLAIN_EOA,
+            "--block",
+            PINNED_BLOCK,
+            "--access-list",
+            &list_path,
+            "--rpc-url",
+            &url,
         ])
         .output()
         .unwrap();
@@ -368,8 +402,14 @@ fn test_validate_exit_1_on_stale_list_for_plain_transfer() {
     );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("\"is_valid\": false"), "must report is_valid:false; got: {stdout}");
-    assert!(stdout.contains("\"stale\"") || stdout.contains("Stale"), "must contain stale entry; got: {stdout}");
+    assert!(
+        stdout.contains("\"is_valid\": false"),
+        "must report is_valid:false; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"stale\"") || stdout.contains("Stale"),
+        "must contain stale entry; got: {stdout}"
+    );
 }
 
 /// The --output human branch for a valid report must print the exact success string.
@@ -382,12 +422,18 @@ fn test_validate_human_output_valid_report() {
     hammer()
         .args([
             "validate",
-            "--from", VITALIK,
-            "--to", PLAIN_EOA,
-            "--block", PINNED_BLOCK,
-            "--access-list", &list_path,
-            "--output", "human",
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            PLAIN_EOA,
+            "--block",
+            PINNED_BLOCK,
+            "--access-list",
+            &list_path,
+            "--output",
+            "human",
+            "--rpc-url",
+            &url,
         ])
         .assert()
         .success()
@@ -401,18 +447,25 @@ fn test_validate_human_output_valid_report() {
 fn test_validate_human_output_invalid_report() {
     require_rpc!(url);
 
-    let stale_list = r#"[{"address":"0x1234567890123456789012345678901234567890","storageKeys":[]}]"#;
+    let stale_list =
+        r#"[{"address":"0x1234567890123456789012345678901234567890","storageKeys":[]}]"#;
     let list_path = temp_file("hammer_rpc_stale_al_human.json", stale_list);
 
     let output = hammer()
         .args([
             "validate",
-            "--from", VITALIK,
-            "--to", PLAIN_EOA,
-            "--block", PINNED_BLOCK,
-            "--access-list", &list_path,
-            "--output", "human",
-            "--rpc-url", &url,
+            "--from",
+            VITALIK,
+            "--to",
+            PLAIN_EOA,
+            "--block",
+            PINNED_BLOCK,
+            "--access-list",
+            &list_path,
+            "--output",
+            "human",
+            "--rpc-url",
+            &url,
         ])
         .output()
         .unwrap();
@@ -420,8 +473,14 @@ fn test_validate_human_output_invalid_report() {
     assert_eq!(output.status.code(), Some(1));
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Issues found:"), "must contain 'Issues found:'; got: {stdout}");
-    assert!(stdout.contains("Gas summary:"), "must contain 'Gas summary:'; got: {stdout}");
+    assert!(
+        stdout.contains("Issues found:"),
+        "must contain 'Issues found:'; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Gas summary:"),
+        "must contain 'Gas summary:'; got: {stdout}"
+    );
 }
 
 // ---
@@ -488,7 +547,5 @@ fn test_compare_blob_tx_rejected() {
         .args(["compare", "--tx-hash", TX_BLOB, "--rpc-url", &url])
         .assert()
         .failure()
-        .stderr(
-            predicate::str::contains("blob").and(predicate::str::contains("EIP-4844")),
-        );
+        .stderr(predicate::str::contains("blob").and(predicate::str::contains("EIP-4844")));
 }

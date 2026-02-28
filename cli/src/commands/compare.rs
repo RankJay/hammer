@@ -132,15 +132,9 @@ pub async fn run(args: CompareArgs) -> Result<()> {
     // Pre-warm the database: fetch all storage/account state in parallel before
     // revm runs, eliminating sequential AlloyDB RPC calls during EVM execution.
     let state_block_id = BlockId::hash(block_hash);
-    let db = super::prefetch::build(
-        provider,
-        state_block_id,
-        state_block_id,
-        tx_req,
-        &declared,
-    )
-    .await
-    .wrap_err("prefetch failed")?;
+    let db = super::prefetch::build(provider, state_block_id, state_block_id, tx_req, &declared)
+        .await
+        .wrap_err("prefetch failed")?;
 
     let report = validate_replay(db, tx_env, block_env, declared).wrap_err("validation failed")?;
 

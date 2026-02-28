@@ -160,4 +160,4 @@ cli  →  core  →  revm + alloy
 
 ## License
 
-MIT OR Apache-2.0
+[PolyForm Noncommercial License 1.0.0](LICENSE) — free for noncommercial use.

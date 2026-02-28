@@ -18,18 +18,18 @@ use alloy_primitives::{Address, U256};
 use alloy_provider::{DynProvider, Provider};
 use alloy_rpc_types_eth::{AccessList, AccessListItem, TransactionRequest};
 use alloy_rpc_types_trace::geth::{
-    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
-    GethDebugTracingOptions,
-    pre_state::PreStateFrame,
+    pre_state::PreStateFrame, GethDebugBuiltInTracerType, GethDebugTracerType,
+    GethDebugTracingCallOptions, GethDebugTracingOptions,
 };
 use futures::future::join_all;
 use revm::database::{AlloyDB, CacheDB};
 use revm::database_interface::{WrapDatabaseAsync, WrapDatabaseRef};
-use revm::state::{AccountInfo, Bytecode};
 use revm::primitives::KECCAK_EMPTY;
+use revm::state::{AccountInfo, Bytecode};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub type PrewarmedDB = CacheDB<WrapDatabaseRef<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider<Ethereum>>>>>;
+pub type PrewarmedDB =
+    CacheDB<WrapDatabaseRef<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider<Ethereum>>>>>;
 
 /// Build a pre-warmed `CacheDB` for the given transaction at `state_block`.
 ///
@@ -56,15 +56,16 @@ pub async fn build(
     };
 
     // One RPC call returns every account + storage slot the tx will touch.
-    let pre_state_map: Option<BTreeMap<Address, alloy_rpc_types_trace::geth::pre_state::AccountState>> =
-        provider
-            .debug_trace_call_prestate(tx_req.clone(), hint_block, trace_opts)
-            .await
-            .ok()
-            .and_then(|frame| match frame {
-                PreStateFrame::Default(mode) => Some(mode.0),
-                _ => None,
-            });
+    let pre_state_map: Option<
+        BTreeMap<Address, alloy_rpc_types_trace::geth::pre_state::AccountState>,
+    > = provider
+        .debug_trace_call_prestate(tx_req.clone(), hint_block, trace_opts)
+        .await
+        .ok()
+        .and_then(|frame| match frame {
+            PreStateFrame::Default(mode) => Some(mode.0),
+            _ => None,
+        });
 
     // Build the underlying AlloyDB stack.
     let alloy_db = AlloyDB::new(provider.clone(), state_block);
