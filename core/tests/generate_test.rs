@@ -3,7 +3,7 @@
 // Uses revm::database::InMemoryDB to construct deterministic EVM state without any RPC calls.
 
 use alloy_primitives::{Address, Bytes, U256};
-use hammer_core::generate;
+use hammer_core::{generate, Recommendation};
 use revm::context::{BlockEnv, TxEnv};
 use revm::database::InMemoryDB;
 use revm::primitives::TxKind;
@@ -76,12 +76,13 @@ fn test_generate_empty_tx_produces_empty_list() {
         "generate() returned error: {:?}",
         result.err()
     );
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
     assert!(
-        optimized.list.0.is_empty(),
+        gen.optimized.list.0.is_empty(),
         "expected empty list for simple ETH transfer, got {:?}",
-        optimized.list
+        gen.optimized.list
     );
+    assert_eq!(gen.decision.recommendation, Recommendation::Skip);
 }
 
 /// tx.from and tx.to must not appear in the output list regardless of what the tracer captured.
@@ -120,9 +121,9 @@ fn test_generate_strips_caller_and_target() {
         "generate() returned error: {:?}",
         result.err()
     );
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
 
-    let addresses: Vec<Address> = optimized.list.0.iter().map(|i| i.address).collect();
+    let addresses: Vec<Address> = gen.optimized.list.0.iter().map(|i| i.address).collect();
     assert!(
         !addresses.contains(&from),
         "tx.from must not be in access list"
@@ -167,11 +168,11 @@ fn test_generate_reverting_contract_produces_empty_list() {
         result.err()
     );
     // No third-party storage accessed before revert; tx.from and tx.to are stripped → empty list.
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
     assert!(
-        optimized.list.0.is_empty(),
+        gen.optimized.list.0.is_empty(),
         "expected empty list for reverting tx, got {:?}",
-        optimized.list
+        gen.optimized.list
     );
 }
 
@@ -249,12 +250,12 @@ fn test_generate_contract_with_multiple_slots() {
 
     let result = generate(db, tx, default_block(coinbase));
     assert!(result.is_ok(), "generate() error: {:?}", result.err());
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
 
     // `third` is tx.to → stripped. All slots on `third` are under a stripped address.
     // The access list must be empty and `third` must be in removed_addresses.
     assert!(
-        optimized.removed_addresses.contains(&third),
+        gen.optimized.removed_addresses.contains(&third),
         "tx.to (third) must be in removed_addresses"
     );
 }
@@ -298,14 +299,14 @@ fn test_generate_nested_create_stripped_from_list() {
 
     let result = generate(db, default_tx(from, to), default_block(coinbase));
     assert!(result.is_ok(), "generate() error: {:?}", result.err());
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
 
     // The created contract address is stripped (warm from creation).
     // tx.from and tx.to are also stripped. List must be empty.
     assert!(
-        optimized.list.0.is_empty(),
+        gen.optimized.list.0.is_empty(),
         "created contract address must be stripped from access list, got {:?}",
-        optimized.list
+        gen.optimized.list
     );
 }
 
@@ -355,8 +356,8 @@ fn test_generate_includes_third_party_storage_access() {
     // `to` does an SLOAD on its own storage slot 0. But `to` is tx.to and therefore warm —
     // the optimizer removes `to` from the list. The slot access on `to` is therefore NOT in the
     // output list (the optimizer strips the whole address). This confirms the optimizer works.
-    let optimized = result.unwrap();
-    let addresses: Vec<Address> = optimized.list.0.iter().map(|i| i.address).collect();
+    let gen = result.unwrap();
+    let addresses: Vec<Address> = gen.optimized.list.0.iter().map(|i| i.address).collect();
     assert!(
         !addresses.contains(&to),
         "tx.to must be stripped even when it has storage accesses"
@@ -431,15 +432,16 @@ fn test_generate_third_party_storage_in_output() {
 
     let result = generate(db, default_tx(from, to), default_block(coinbase));
     assert!(result.is_ok(), "generate() error: {:?}", result.err());
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
 
-    let addresses: Vec<Address> = optimized.list.0.iter().map(|i| i.address).collect();
+    let addresses: Vec<Address> = gen.optimized.list.0.iter().map(|i| i.address).collect();
     assert!(
         addresses.contains(&third),
         "third-party contract must appear in the access list, got {:?}",
-        optimized.list
+        gen.optimized.list
     );
-    let third_item = optimized
+    let third_item = gen
+        .optimized
         .list
         .0
         .iter()
@@ -453,6 +455,7 @@ fn test_generate_third_party_storage_in_output() {
     );
     assert!(!addresses.contains(&from), "tx.from must not be in list");
     assert!(!addresses.contains(&to), "tx.to must not be in list");
+    assert_eq!(gen.decision.recommendation, Recommendation::Attach);
 }
 
 /// TxKind::Create sets tx_to = Address::ZERO in lib.rs. This test exercises that branch
@@ -581,9 +584,9 @@ fn test_generate_two_third_party_contracts_in_output() {
 
     let result = generate(db, default_tx(from, to), default_block(coinbase));
     assert!(result.is_ok(), "generate() error: {:?}", result.err());
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
 
-    let addresses: Vec<Address> = optimized.list.0.iter().map(|i| i.address).collect();
+    let addresses: Vec<Address> = gen.optimized.list.0.iter().map(|i| i.address).collect();
     assert!(
         addresses.contains(&third_a),
         "third_a must appear in the access list"
@@ -593,7 +596,8 @@ fn test_generate_two_third_party_contracts_in_output() {
         "third_b must appear in the access list"
     );
 
-    let item_a = optimized
+    let item_a = gen
+        .optimized
         .list
         .0
         .iter()
@@ -603,7 +607,8 @@ fn test_generate_two_third_party_contracts_in_output() {
         item_a.storage_keys.contains(&alloy_primitives::B256::ZERO),
         "slot 0 of third_a must be in the access list"
     );
-    let item_b = optimized
+    let item_b = gen
+        .optimized
         .list
         .0
         .iter()
@@ -616,6 +621,7 @@ fn test_generate_two_third_party_contracts_in_output() {
 
     assert!(!addresses.contains(&from), "tx.from must not be in list");
     assert!(!addresses.contains(&to), "tx.to must not be in list");
+    assert_eq!(gen.decision.recommendation, Recommendation::Attach);
 }
 
 /// `to` dispatches a CALL to the coinbase address, which has SLOAD bytecode.
@@ -676,15 +682,15 @@ fn test_generate_coinbase_access_stripped() {
 
     let result = generate(db, default_tx(from, to), default_block(coinbase));
     assert!(result.is_ok(), "generate() error: {:?}", result.err());
-    let optimized = result.unwrap();
+    let gen = result.unwrap();
 
-    let addresses: Vec<Address> = optimized.list.0.iter().map(|i| i.address).collect();
+    let addresses: Vec<Address> = gen.optimized.list.0.iter().map(|i| i.address).collect();
     assert!(
         !addresses.contains(&coinbase),
         "coinbase must be stripped from the access list (EIP-3651)"
     );
     assert!(
-        optimized.removed_addresses.contains(&coinbase),
+        gen.optimized.removed_addresses.contains(&coinbase),
         "coinbase must appear in removed_addresses"
     );
 }

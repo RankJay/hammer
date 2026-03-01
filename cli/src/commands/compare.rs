@@ -4,12 +4,12 @@ use alloy_provider::Provider;
 use alloy_rpc_types_eth::{TransactionRequest, TransactionTrait};
 use clap::Args;
 use eyre::{Context, Result};
-use hammer_core::validate_replay;
+use hammer_core::{compute_gas_decision, validate_replay, OptimizedAccessList, Recommendation};
 use reqwest::Url;
 use revm::context::{BlockEnv, TxEnv};
 use revm::primitives::TxKind;
 
-use super::util::{assert_not_blob, assert_not_create, assert_post_berlin};
+use super::util::{assert_not_create, assert_post_berlin};
 
 #[derive(Args)]
 pub struct CompareArgs {
@@ -24,7 +24,7 @@ pub struct CompareArgs {
 /// # Test boundary
 ///
 /// This function requires a live RPC connection and cannot be unit tested in isolation.
-/// Its guard logic (`assert_not_create`, `assert_not_blob`, `assert_post_berlin`) is
+/// Its guard logic (`assert_not_create`, `assert_post_berlin`) is
 /// covered by unit tests in `cli::commands::util`. The diffing and report formatting
 /// delegates entirely to `validate_replay()` + `ValidationReport`, which are covered
 /// exhaustively in `hammer_core::validator` tests. End-to-end behaviour is verified
@@ -57,10 +57,7 @@ pub async fn run(args: CompareArgs) -> Result<()> {
     // Guard 1: Reject contract creation transactions
     assert_not_create(tx.inner.to())?;
 
-    // Guard 2: Reject blob transactions (EIP-4844, Type 3)
-    assert_not_blob(tx.inner.blob_versioned_hashes())?;
-
-    // Guard 4: Reject reverted transactions
+    // Guard 3: Reject reverted transactions
     if !receipt.status() {
         eyre::bail!("transaction reverted on-chain — access list comparison is not meaningful for failed transactions");
     }
@@ -147,6 +144,20 @@ pub async fn run(args: CompareArgs) -> Result<()> {
         sign,
         s.waste_per_tx.unsigned_abs(),
     );
+
+    let optimal = OptimizedAccessList::new(report.optimal_list.clone(), vec![]);
+    let decision = compute_gas_decision(&optimal);
+    match decision.recommendation {
+        Recommendation::Attach => {
+            println!(
+                "Recommendation: attach (saves {} gas | {} addresses, {} slots)",
+                decision.net_gas_delta, decision.cold_addresses, decision.cold_slots
+            );
+        }
+        Recommendation::Skip => {
+            println!("Recommendation: skip (list would cost more than it saves)");
+        }
+    }
 
     let execution_penalty: u64 = report
         .entries

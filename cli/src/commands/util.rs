@@ -59,24 +59,10 @@ pub fn assert_not_create(to: Option<alloy_primitives::Address>) -> Result<()> {
     Ok(())
 }
 
-/// Reject blob transactions (EIP-4844, Type 3).
-///
-/// Blob data (versioned hashes, KZG commitments/proofs) is not replayed, making
-/// access list comparison meaningless for these transactions.
-pub fn assert_not_blob(blob_hashes: Option<&[alloy_primitives::B256]>) -> Result<()> {
-    if blob_hashes.map_or(false, |h| !h.is_empty()) {
-        eyre::bail!(
-            "blob transactions (EIP-4844, Type 3) are not supported \
-             — blob data is not replayed"
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::{Address, B256};
+    use alloy_primitives::Address;
 
     // --- parse_u256 edge cases ---
 
@@ -197,26 +183,6 @@ mod tests {
     fn test_assert_not_create_with_none() {
         let err = assert_not_create(None).unwrap_err();
         assert!(err.to_string().contains("CREATE"));
-    }
-
-    // --- assert_not_blob ---
-
-    #[test]
-    fn test_assert_not_blob_with_empty_hashes() {
-        assert!(assert_not_blob(Some(&[])).is_ok());
-    }
-
-    #[test]
-    fn test_assert_not_blob_with_none() {
-        assert!(assert_not_blob(None).is_ok());
-    }
-
-    #[test]
-    fn test_assert_not_blob_with_hashes() {
-        let hash = B256::ZERO;
-        let err = assert_not_blob(Some(&[hash])).unwrap_err();
-        assert!(err.to_string().contains("blob"));
-        assert!(err.to_string().contains("EIP-4844"));
     }
 
     // --- parse_block_id ---

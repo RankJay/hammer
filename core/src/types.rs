@@ -81,6 +81,41 @@ impl OptimizedAccessList {
     }
 }
 
+/// Recommendation for whether to attach an access list to a transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Recommendation {
+    Attach,
+    Skip,
+}
+
+/// Gas decision output: net delta and attach/skip recommendation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GasDecision {
+    /// Gas cost of the optimal access list (upfront EIP-2930 cost).
+    pub access_list_cost: u64,
+    /// Gas that would be spent on cold accesses without any access list.
+    pub no_list_cost: u64,
+    /// net_gas_delta = no_list_cost - access_list_cost.
+    /// Positive means attaching saves gas. Negative means it hurts.
+    pub net_gas_delta: i64,
+    /// Minimum cold storage slot touches needed for the list to break even.
+    pub break_even_slots: u64,
+    /// Number of cold addresses touched (excluding warm-by-default).
+    pub cold_addresses: u64,
+    /// Number of cold storage slots touched.
+    pub cold_slots: u64,
+    /// attach if net_gas_delta > 0, skip if <= 0.
+    pub recommendation: Recommendation,
+}
+
+/// Result of access list generation: optimized list + gas decision.
+#[derive(Debug, Clone)]
+pub struct GenerateResult {
+    pub optimized: OptimizedAccessList,
+    pub decision: GasDecision,
+}
+
 /// Full validation report comparing declared vs actual access list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {

@@ -2,5 +2,8 @@
 .cursor/
 .ai/
 
+# internals
+server/
+
 # Benchmarking
 benchmarks/

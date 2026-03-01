@@ -106,21 +106,39 @@ pub async fn run(args: GenerateArgs) -> Result<()> {
     .await
     .wrap_err("prefetch failed")?;
 
-    let optimal = generate(db, tx_env, block_env).wrap_err("access list generation failed")?;
+    let result = generate(db, tx_env, block_env).wrap_err("access list generation failed")?;
 
     match args.output.as_str() {
-        "json" => println!("{}", serde_json::to_string_pretty(&optimal.list)?),
+        "json" => {
+            let out = serde_json::json!({
+                "access_list": result.optimized.list,
+                "decision": result.decision
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        }
         "human" => {
-            let cost = access_list_gas_cost(&optimal.list);
+            let cost = access_list_gas_cost(&result.optimized.list);
+            let d = &result.decision;
+            match d.recommendation {
+                hammer_core::Recommendation::Attach => {
+                    println!(
+                        "Recommendation: attach (saves {} gas | {} addresses, {} slots)",
+                        d.net_gas_delta, d.cold_addresses, d.cold_slots
+                    );
+                }
+                hammer_core::Recommendation::Skip => {
+                    println!("Recommendation: skip (list would cost more than it saves)");
+                }
+            }
             println!("Access list (gas cost: {}):", cost);
-            for item in &optimal.list.0 {
+            for item in &result.optimized.list.0 {
                 println!("  {}:", item.address);
                 for key in &item.storage_keys {
                     println!("    - {}", key);
                 }
             }
-            if !optimal.removed_addresses.is_empty() {
-                println!("Removed (warm): {:?}", optimal.removed_addresses);
+            if !result.optimized.removed_addresses.is_empty() {
+                println!("Removed (warm): {:?}", result.optimized.removed_addresses);
             }
         }
         _ => unreachable!(),

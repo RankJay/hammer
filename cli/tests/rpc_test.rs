@@ -164,8 +164,11 @@ fn test_generate_json_output_is_valid_json() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("stdout must be valid JSON");
 
-    let arr = parsed.as_array().expect("JSON must be an array");
-    // Every element must have `address` and `storageKeys`.
+    let obj = parsed.as_object().expect("JSON must be an object");
+    assert!(obj.contains_key("access_list"), "must have access_list");
+    assert!(obj.contains_key("decision"), "must have decision");
+
+    let arr = obj["access_list"].as_array().expect("access_list must be array");
     for item in arr {
         assert!(item["address"].is_string(), "each entry needs 'address'");
         assert!(
@@ -265,18 +268,17 @@ fn test_generate_then_validate_is_correct() {
     let parsed: serde_json::Value =
         serde_json::from_str(&gen_stdout).expect("generate stdout must be valid JSON");
 
-    // Guard against vacuous pass: the chosen target must touch contract storage.
-    // Uniswap V3 Router reads slot 0 (reentrancy lock) on every call, so this should
-    // always be non-empty. If it is empty, the test skips rather than falsely passing.
-    let arr = parsed.as_array().expect("must be array");
+    let access_list = parsed["access_list"].clone();
+    let arr = access_list.as_array().expect("access_list must be array");
     if arr.is_empty() {
         // No storage touched at this block — test is vacuous, skip.
         eprintln!("SKIP: generated access list is empty, test would be vacuous");
         return;
     }
 
-    // Write generated list to a temp file for validate.
-    let list_path = temp_file("hammer_rpc_gen_validate.json", &gen_stdout);
+    // Write access_list only to temp file for validate (validate expects array format).
+    let list_str = serde_json::to_string(&access_list).unwrap();
+    let list_path = temp_file("hammer_rpc_gen_validate.json", &list_str);
 
     // Step 2: validate the generated list against the same tx/block
     let val_output = hammer()
@@ -538,14 +540,17 @@ fn test_compare_valid_tx_produces_gas_summary() {
         );
 }
 
-/// The first-ever EIP-4844 blob tx must be rejected by the blob guard.
+/// The first-ever EIP-4844 blob tx is now supported; compare must succeed.
 #[test]
-fn test_compare_blob_tx_rejected() {
+fn test_compare_blob_tx_supported() {
     require_rpc!(url);
 
     hammer()
         .args(["compare", "--tx-hash", TX_BLOB, "--rpc-url", &url])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("blob").and(predicate::str::contains("EIP-4844")));
+        .success()
+        .stdout(
+            predicate::str::contains("List cost:")
+                .and(predicate::str::contains("Recommendation:")),
+        );
 }

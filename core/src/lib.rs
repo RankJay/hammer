@@ -15,14 +15,18 @@ pub mod warm;
 
 pub use error::HammerError;
 pub use gas::{
-    access_list_gas_cost, gas_to_eth, ACCESS_LIST_ADDRESS_COST, ACCESS_LIST_STORAGE_KEY_COST,
+    access_list_gas_cost, compute_gas_decision, gas_to_eth, ACCESS_LIST_ADDRESS_COST,
+    ACCESS_LIST_STORAGE_KEY_COST,
 };
 pub use optimizer::optimize;
 pub use tracer::generate_access_list;
-pub use types::{DiffEntry, GasSummary, OptimizedAccessList, RawTraceResult, ValidationReport};
+pub use types::{
+    DiffEntry, GasDecision, GasSummary, GenerateResult, OptimizedAccessList, RawTraceResult,
+    Recommendation, ValidationReport,
+};
 
 /// Generate an optimized access list for the given transaction.
-pub fn generate<DB>(db: DB, tx: TxEnv, block: BlockEnv) -> Result<OptimizedAccessList, HammerError>
+pub fn generate<DB>(db: DB, tx: TxEnv, block: BlockEnv) -> Result<GenerateResult, HammerError>
 where
     DB: Database,
     DB::Error: std::error::Error + Send + Sync + 'static,
@@ -34,7 +38,12 @@ where
     };
     let coinbase = block.beneficiary;
     let raw = generate_access_list(db, tx, block, false)?;
-    Ok(optimize(raw, tx_from, tx_to, coinbase))
+    let optimal = optimize(raw, tx_from, tx_to, coinbase);
+    let decision = gas::compute_gas_decision(&optimal);
+    Ok(GenerateResult {
+        optimized: optimal,
+        decision,
+    })
 }
 
 /// Validate a declared access list against the optimal one from execution trace.
