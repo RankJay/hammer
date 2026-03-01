@@ -168,7 +168,9 @@ fn test_generate_json_output_is_valid_json() {
     assert!(obj.contains_key("access_list"), "must have access_list");
     assert!(obj.contains_key("decision"), "must have decision");
 
-    let arr = obj["access_list"].as_array().expect("access_list must be array");
+    let arr = obj["access_list"]
+        .as_array()
+        .expect("access_list must be array");
     for item in arr {
         assert!(item["address"].is_string(), "each entry needs 'address'");
         assert!(
@@ -550,7 +552,6 @@ fn test_compare_blob_tx_supported() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("List cost:")
-                .and(predicate::str::contains("Recommendation:")),
+            predicate::str::contains("List cost:").and(predicate::str::contains("Recommendation:")),
         );
 }

@@ -31,20 +31,17 @@ Hammer traces execution through revm, then strips all warm-by-default addresses:
 Running `hammer compare` on a [jaredfromsubway MEV bot](https://etherscan.io/address/0xae2fc483527b8ef99eb5d9b44875f005ba1fae13) transaction:
 
 ```
-Access list optimality: 38.8%
+List cost:  62000 gas declared  →  30000 gas optimal  (+32000  upfront)
+Recommendation: attach (saves 19600 gas | 4 addresses, 15 slots)
+Execution:  0 missing / 1 incomplete  →  +30000 gas at runtime
+Upfront:    6 stale / 0 redundant  →  +62000 gas wasted
 Issues: 7 entries
-  Stale: WBTC token — 1 slot — 1,900 gas wasted
-  Stale: WBTC/USDT pool — 5 slots — 11,900 gas wasted
-  Stale: WETH token — 1 slot — 1,900 gas wasted
-  Stale: USDT/ETH pool — 5 slots — 11,900 gas wasted
-  Stale: USDT token — 7 slots — 15,700 gas wasted
-  Incomplete: WBTC/ETH pool — 15 missing slots — 30,000 gas wasted
-  Stale: WBTC/ETH pool — 10 slots — 19,000 gas wasted
-
-Total waste: 92,300 gas (28.9% of gas used)
+  Stale { address: 0x..., storage_keys: [...] }
+  Incomplete { address: 0x..., missing_slots: [...] }
+  ...
 ```
 
-One of Ethereum's highest-frequency MEV bots, running with a 61% suboptimal access list.
+Execution penalty = gas paid at runtime for missing/incomplete entries. Upfront waste = gas paid for stale/redundant/duplicate entries. One of Ethereum's highest-frequency MEV bots, running with a suboptimal access list.
 
 ## Installation
 
@@ -98,7 +95,7 @@ hammer compare \
   --tx-hash 0x2af76856a4ac004647e487097b82adc660747544ed7c51ede51024f16685d160
 ```
 
-Fetches the transaction, extracts its declared access list, re-traces execution, and reports optimality.
+Fetches the transaction, extracts its declared access list, re-traces execution, and reports list cost, attach/skip recommendation, execution penalty (missing/incomplete), and upfront waste (stale/redundant).
 
 ## Why
 
@@ -141,7 +138,7 @@ cli  →  core  →  revm + alloy
 | -------------- | ----------------------------------------------------------------------------------------- |
 | `tracer.rs`    | `HammerInspector` — revm Inspector impl. Hooks SLOAD/SSTORE/CALL/CREATE opcodes.             |
 | `optimizer.rs` | Warm-address stripping. Removes tx.from, tx.to, coinbase, precompiles, created contracts. |
-| `validator.rs` | Set diff between declared and actual. Categorizes: missing, stale, incomplete, redundant. |
+| `validator.rs` | Set diff between declared and actual. Categorizes: missing, stale, incomplete, redundant, duplicate. |
 | `gas.rs`       | EIP-2929/2930 constants and gas math. Pure functions.                                     |
 | `types.rs`     | `ValidationReport`, `DiffEntry`, `GasSummary`, `OptimizedAccessList`.                     |
 

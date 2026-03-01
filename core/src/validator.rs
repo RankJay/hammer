@@ -97,8 +97,7 @@ pub fn validate(
     for (addr, opt_slots) in &optimal_map {
         if !declared_map.contains_key(addr) {
             // Full cold cost: address + slots (so execution penalty sums to no_list_cost)
-            let gas_waste = COLD_ACCOUNT_ACCESS_COST
-                + (opt_slots.len() as u64) * COLD_SLOAD_COST;
+            let gas_waste = COLD_ACCOUNT_ACCESS_COST + (opt_slots.len() as u64) * COLD_SLOAD_COST;
             entries.push(DiffEntry::Missing {
                 address: *addr,
                 storage_keys: opt_slots.iter().copied().collect(),

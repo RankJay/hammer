@@ -66,8 +66,7 @@ pub fn compute_gas_decision(optimal: &OptimizedAccessList) -> GasDecision {
     let break_even_slots = if address_overhead_savings >= 0 {
         0
     } else {
-        ((-address_overhead_savings) as u64)
-            .div_ceil(NET_SAVINGS_PER_ACCESSED_SLOT.unsigned_abs())
+        ((-address_overhead_savings) as u64).div_ceil(NET_SAVINGS_PER_ACCESSED_SLOT.unsigned_abs())
     };
 
     let recommendation = if net_gas_delta > 0 {
@@ -324,7 +323,10 @@ mod tests {
         let expected_al_cost = 2 * ACCESS_LIST_ADDRESS_COST + 3 * ACCESS_LIST_STORAGE_KEY_COST;
         assert_eq!(d.no_list_cost, expected_no_list);
         assert_eq!(d.access_list_cost, expected_al_cost);
-        assert_eq!(d.net_gas_delta, expected_no_list as i64 - expected_al_cost as i64);
+        assert_eq!(
+            d.net_gas_delta,
+            expected_no_list as i64 - expected_al_cost as i64
+        );
         assert_eq!(d.cold_addresses, 2);
         assert_eq!(d.cold_slots, 3);
     }
