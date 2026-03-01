@@ -96,7 +96,9 @@ pub fn validate(
 
     for (addr, opt_slots) in &optimal_map {
         if !declared_map.contains_key(addr) {
-            let gas_waste = (opt_slots.len() as u64) * (COLD_SLOAD_COST - WARM_STORAGE_READ_COST);
+            // Full cold cost: address + slots (so execution penalty sums to no_list_cost)
+            let gas_waste = COLD_ACCOUNT_ACCESS_COST
+                + (opt_slots.len() as u64) * COLD_SLOAD_COST;
             entries.push(DiffEntry::Missing {
                 address: *addr,
                 storage_keys: opt_slots.iter().copied().collect(),
@@ -544,7 +546,7 @@ mod tests {
         // Declared is empty but optimal needs 1 addr + 1 slot.
         // declared_list_cost = 0, optimal_list_cost = 4300
         // waste_per_tx = -4300 (underpaid upfront)
-        // missing gas_waste = 1 * (COLD_SLOAD - WARM) = 2000  (execution penalty, different space)
+        // missing gas_waste = full cold cost = COLD_ACCOUNT + COLD_SLOAD = 4700
         let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
         let declared = make_declared(vec![]);
         let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
@@ -564,8 +566,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             missing.gas_waste(),
-            COLD_SLOAD_COST - WARM_STORAGE_READ_COST
+            COLD_ACCOUNT_ACCESS_COST + COLD_SLOAD_COST
         );
+        // Invariant: execution penalty (Missing + Incomplete) == no_list_cost when declared empty
+        let execution_penalty: u64 = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, DiffEntry::Missing { .. } | DiffEntry::Incomplete { .. }))
+            .map(|e| e.gas_waste())
+            .sum();
+        assert_eq!(execution_penalty, report.gas_summary.no_list_cost);
     }
 
     #[test]
@@ -606,9 +616,8 @@ mod tests {
     fn test_optimality_mixed_stale_and_missing() {
         // Declared has contract_b (stale), optimal needs contract_a (missing).
         // Both cost the same upfront (ADDRESS + SLOT = 4300), so waste_per_tx == 0.
-        // But stale gas_waste (4300) and missing gas_waste (2000) are in different spaces —
-        // summing them into a single "total_issue_waste" would give 6300, not 0.
-        // This test proves the two cost spaces must be reported separately.
+        // Stale gas_waste (4300) = upfront cost; Missing gas_waste (4700) = execution cost.
+        // The two cost spaces (upfront vs execution) are reported separately.
         let optimal = make_optimal(vec![(contract_a(), vec![slot(1)])]);
         let declared = make_declared(vec![(contract_b(), vec![slot(1)])]);
         let report = validate(&declared, &optimal, from_addr(), to_addr(), coinbase_addr());
@@ -629,9 +638,9 @@ mod tests {
             stale_waste,
             ACCESS_LIST_ADDRESS_COST + ACCESS_LIST_STORAGE_KEY_COST
         );
-        assert_eq!(missing_waste, COLD_SLOAD_COST - WARM_STORAGE_READ_COST);
-        // Summing them would give 6300 — completely different from waste_per_tx (0)
-        assert_ne!(stale_waste + missing_waste, 0);
+        assert_eq!(missing_waste, COLD_ACCOUNT_ACCESS_COST + COLD_SLOAD_COST);
+        // missing_waste == no_list_cost (single Missing entry)
+        assert_eq!(missing_waste, report.gas_summary.no_list_cost);
     }
 
     #[test]

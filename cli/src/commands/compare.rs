@@ -188,6 +188,51 @@ pub async fn run(args: CompareArgs) -> Result<()> {
         );
     }
 
+    let upfront_waste: u64 = report
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                hammer_core::types::DiffEntry::Stale { .. }
+                    | hammer_core::types::DiffEntry::Redundant { .. }
+                    | hammer_core::types::DiffEntry::Duplicate { .. }
+            )
+        })
+        .map(|e| e.gas_waste())
+        .sum();
+    if upfront_waste > 0 {
+        let stale_count = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, hammer_core::types::DiffEntry::Stale { .. }))
+            .count();
+        let redundant_count = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, hammer_core::types::DiffEntry::Redundant { .. }))
+            .count();
+        let duplicate_count = report
+            .entries
+            .iter()
+            .filter(|e| matches!(e, hammer_core::types::DiffEntry::Duplicate { .. }))
+            .count();
+        let parts: Vec<String> = [
+            (stale_count, "stale"),
+            (redundant_count, "redundant"),
+            (duplicate_count, "duplicate"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, label)| format!("{} {}", n, label))
+        .collect();
+        println!(
+            "Upfront:    {}  →  +{} gas wasted",
+            parts.join(" / "),
+            upfront_waste,
+        );
+    }
+
     if !report.is_valid {
         println!("Issues: {} entries", report.entries.len());
         for e in &report.entries {
